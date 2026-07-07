@@ -54,29 +54,52 @@ export async function POST(request: NextRequest) {
   const claudePath = getClaudePath();
   const abortController = new AbortController();
 
-  const args = [
-    "-p",
-    message,
-    "--output-format",
-    "stream-json",
-    "--include-partial-messages",
-    "--verbose",
-    "--append-system-prompt",
-    systemPrompt,
-    "--allowedTools",
-    "Bash",
-    "--allowedTools",
-    "WebFetch",
-    "--allowedTools",
-    "Read",
-    "--max-budget-usd",
-    "1.00",
-    "--name",
-    "carrusel-chat",
-  ];
+  let args: string[] = [];
+  const customArgsTemplate = process.env.CLI_ARGS_TEMPLATE;
+  if (customArgsTemplate) {
+    let template: string[];
+    try {
+      template = JSON.parse(customArgsTemplate);
+    } catch {
+      template = customArgsTemplate.split(",");
+    }
 
-  if (sessionId) {
-    args.push("--resume", sessionId);
+    for (const arg of template) {
+      if (arg.includes("{sessionId}") && !sessionId) {
+        continue;
+      }
+      args.push(
+        arg
+          .replace("{message}", message)
+          .replace("{systemPrompt}", systemPrompt)
+          .replace("{sessionId}", sessionId ?? "")
+      );
+    }
+  } else {
+    args = [
+      "-p",
+      message,
+      "--output-format",
+      "stream-json",
+      "--include-partial-messages",
+      "--verbose",
+      "--append-system-prompt",
+      systemPrompt,
+      "--allowedTools",
+      "Bash",
+      "--allowedTools",
+      "WebFetch",
+      "--allowedTools",
+      "Read",
+      "--max-budget-usd",
+      "1.00",
+      "--name",
+      "carrusel-chat",
+    ];
+
+    if (sessionId) {
+      args.push("--resume", sessionId);
+    }
   }
 
   const encoder = new TextEncoder();
@@ -121,8 +144,18 @@ export async function POST(request: NextRequest) {
 
       let buffer = "";
       let resolvedSessionId = sessionId ?? "";
+      const isRawTextMode = process.env.CLI_OUTPUT_FORMAT === "text";
 
       childProcess.stdout?.on("data", (chunk: Buffer) => {
+        if (isRawTextMode) {
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({ type: "token", text: chunk.toString() })}\n\n`
+            )
+          );
+          return;
+        }
+
         buffer += chunk.toString();
         const lines = buffer.split("\n");
         buffer = lines.pop() ?? "";
